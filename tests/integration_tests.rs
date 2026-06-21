@@ -933,7 +933,7 @@ fn value_too_large() {
         ));
         assert!(matches!(
             table.insert(too_big_value.as_slice(), small_value.as_slice()),
-            Err(StorageError::ValueTooLarge(_))
+            Err(StorageError::KeyTooLarge(_))
         ));
         assert!(matches!(
             table.insert(too_big_value.as_slice(), too_big_value.as_slice()),
@@ -943,7 +943,7 @@ fn value_too_large() {
         let almost_big_value = vec![0u8; 2 * 1024 * 1024 * 1024];
         assert!(matches!(
             table.insert(almost_big_value.as_slice(), almost_big_value.as_slice()),
-            Err(StorageError::ValueTooLarge(_))
+            Err(StorageError::KeyValuePairTooLarge { .. })
         ));
     }
     txn.commit().unwrap();
@@ -951,6 +951,157 @@ fn value_too_large() {
     let txn = db.begin_read().unwrap();
     let table = txn.open_table(SLICE_TABLE).unwrap();
     assert!(table.is_empty().unwrap());
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn size_limit_three_violations_distinct() {
+    use redb::MAX_KEY_LENGTH;
+    use redb::MAX_PAIR_LENGTH;
+    use redb::MAX_VALUE_LENGTH;
+
+    assert_eq!(MAX_KEY_LENGTH, 3 * 1024 * 1024 * 1024);
+    assert_eq!(MAX_VALUE_LENGTH, 3 * 1024 * 1024 * 1024);
+    assert_eq!(MAX_PAIR_LENGTH, 3 * 1024 * 1024 * 1024 + 768 * 1024 * 1024);
+
+    let key_err = StorageError::KeyTooLarge(MAX_KEY_LENGTH + 1);
+    let value_err = StorageError::ValueTooLarge(MAX_VALUE_LENGTH + 1);
+    let pair_err = StorageError::KeyValuePairTooLarge {
+        key_len: 1,
+        value_len: MAX_PAIR_LENGTH,
+    };
+
+    let key_msg = format!("{}", key_err);
+    let value_msg = format!("{}", value_err);
+    let pair_msg = format!("{}", pair_err);
+
+    assert!(key_msg.contains("key"));
+    assert!(!key_msg.contains("combined"));
+    assert!(!key_msg.contains("value length"));
+
+    assert!(value_msg.contains("value"));
+    assert!(!value_msg.contains("combined"));
+    assert!(!value_msg.contains("key length"));
+
+    assert!(pair_msg.contains("combined"));
+    assert!(pair_msg.contains("key length"));
+    assert!(pair_msg.contains("value length"));
+
+    assert_ne!(key_msg, value_msg);
+    assert_ne!(key_msg, pair_msg);
+    assert_ne!(value_msg, pair_msg);
+
+    assert!(key_msg.contains(&format!("{}GiB", MAX_KEY_LENGTH / 1024 / 1024 / 1024)));
+    assert!(value_msg.contains(&format!("{}GiB", MAX_VALUE_LENGTH / 1024 / 1024 / 1024)));
+    assert!(pair_msg.contains(&format!("{}GiB", MAX_PAIR_LENGTH / 1024 / 1024 / 1024)));
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn size_limit_boundary_values() {
+    let tmpfile = create_tempfile();
+    let db = Database::create(tmpfile.path()).unwrap();
+    let txn = db.begin_write().unwrap();
+
+    use redb::MAX_KEY_LENGTH;
+    use redb::MAX_PAIR_LENGTH;
+    use redb::MAX_VALUE_LENGTH;
+
+    {
+        let mut table = txn.open_table(SLICE_TABLE).unwrap();
+
+        let small = vec![0u8; 1024];
+
+        let key_at_limit = vec![0u8; MAX_KEY_LENGTH];
+        assert!(matches!(
+            table.insert(key_at_limit.as_slice(), small.as_slice()),
+            Ok(_)
+        ));
+        drop(key_at_limit);
+
+        let value_at_limit = vec![0u8; MAX_VALUE_LENGTH];
+        assert!(matches!(
+            table.insert(small.as_slice(), value_at_limit.as_slice()),
+            Ok(_)
+        ));
+        drop(value_at_limit);
+
+        let key_over = vec![0u8; MAX_KEY_LENGTH + 1];
+        assert!(matches!(
+            table.insert(key_over.as_slice(), small.as_slice()),
+            Err(StorageError::KeyTooLarge(_))
+        ));
+        drop(key_over);
+
+        let value_over = vec![0u8; MAX_VALUE_LENGTH + 1];
+        assert!(matches!(
+            table.insert(small.as_slice(), value_over.as_slice()),
+            Err(StorageError::ValueTooLarge(_))
+        ));
+        drop(value_over);
+
+        let pair_key = vec![0u8; MAX_KEY_LENGTH];
+        let pair_value = vec![0u8; MAX_PAIR_LENGTH - MAX_KEY_LENGTH];
+        assert!(matches!(
+            table.insert(pair_key.as_slice(), pair_value.as_slice()),
+            Ok(_)
+        ));
+        drop(pair_value);
+
+        let pair_value_over = vec![0u8; MAX_PAIR_LENGTH - MAX_KEY_LENGTH + 1];
+        assert!(matches!(
+            table.insert(pair_key.as_slice(), pair_value_over.as_slice()),
+            Err(StorageError::KeyValuePairTooLarge { .. })
+        ));
+    }
+}
+
+#[test]
+fn size_limit_error_conversion_preserves_distinction() {
+    use redb::{DatabaseError, Error, StorageError, TableError, TransactionError, CommitError};
+
+    let key_len = 100;
+    let value_len = 200;
+
+    let db_err_key: DatabaseError = StorageError::KeyTooLarge(key_len).into();
+    let db_err_value: DatabaseError = StorageError::ValueTooLarge(value_len).into();
+    let db_err_pair: DatabaseError = StorageError::KeyValuePairTooLarge { key_len, value_len }.into();
+
+    assert!(format!("{}", db_err_key).contains("key"));
+    assert!(format!("{}", db_err_value).contains("value"));
+    assert!(format!("{}", db_err_pair).contains("combined"));
+
+    let table_err_key: TableError = StorageError::KeyTooLarge(key_len).into();
+    let table_err_value: TableError = StorageError::ValueTooLarge(value_len).into();
+    let table_err_pair: TableError = StorageError::KeyValuePairTooLarge { key_len, value_len }.into();
+
+    assert!(format!("{}", table_err_key).contains("key"));
+    assert!(format!("{}", table_err_value).contains("value"));
+    assert!(format!("{}", table_err_pair).contains("combined"));
+
+    let txn_err_key: TransactionError = StorageError::KeyTooLarge(key_len).into();
+    let txn_err_value: TransactionError = StorageError::ValueTooLarge(value_len).into();
+    let txn_err_pair: TransactionError = StorageError::KeyValuePairTooLarge { key_len, value_len }.into();
+
+    assert!(format!("{}", txn_err_key).contains("key"));
+    assert!(format!("{}", txn_err_value).contains("value"));
+    assert!(format!("{}", txn_err_pair).contains("combined"));
+
+    let commit_err_key: CommitError = StorageError::KeyTooLarge(key_len).into();
+    let commit_err_value: CommitError = StorageError::ValueTooLarge(value_len).into();
+    let commit_err_pair: CommitError = StorageError::KeyValuePairTooLarge { key_len, value_len }.into();
+
+    assert!(format!("{}", commit_err_key).contains("key"));
+    assert!(format!("{}", commit_err_value).contains("value"));
+    assert!(format!("{}", commit_err_pair).contains("combined"));
+
+    let top_err_key: Error = StorageError::KeyTooLarge(key_len).into();
+    let top_err_value: Error = StorageError::ValueTooLarge(value_len).into();
+    let top_err_pair: Error = StorageError::KeyValuePairTooLarge { key_len, value_len }.into();
+
+    assert!(format!("{}", top_err_key).contains("key"));
+    assert!(format!("{}", top_err_value).contains("value"));
+    assert!(format!("{}", top_err_pair).contains("combined"));
 }
 
 #[test]

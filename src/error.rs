@@ -1,4 +1,4 @@
-use crate::tree_store::{FILE_FORMAT_VERSION3, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH};
+use crate::tree_store::{FILE_FORMAT_VERSION3, MAX_KEY_LENGTH, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH};
 use crate::{ReadTransaction, TypeName};
 use std::fmt::{Display, Formatter};
 use std::sync::PoisonError;
@@ -68,7 +68,7 @@ impl Display for StorageError {
                 write!(
                     f,
                     "The key (length={len}) being inserted exceeds the maximum of {}GiB",
-                    MAX_VALUE_LENGTH / 1024 / 1024 / 1024
+                    MAX_KEY_LENGTH / 1024 / 1024 / 1024
                 )
             }
             StorageError::KeyValuePairTooLarge { key_len, value_len } => {
@@ -627,6 +627,21 @@ impl Display for Error {
                     f,
                     "The value (length={len}) being inserted exceeds the maximum of {}GiB",
                     MAX_VALUE_LENGTH / 1024 / 1024 / 1024
+                )
+            }
+            Error::KeyTooLarge(len) => {
+                write!(
+                    f,
+                    "The key (length={len}) being inserted exceeds the maximum of {}GiB",
+                    MAX_KEY_LENGTH / 1024 / 1024 / 1024
+                )
+            }
+            Error::KeyValuePairTooLarge { key_len, value_len } => {
+                write!(
+                    f,
+                    "The combined key+value (key length={key_len}, value length={value_len}, combined length={}) exceeds the maximum of {}GiB",
+                    key_len + value_len,
+                    MAX_PAIR_LENGTH / 1024 / 1024 / 1024
                 )
             }
             Error::TypeDefinitionChanged {

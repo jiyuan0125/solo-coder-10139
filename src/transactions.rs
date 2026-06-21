@@ -5,10 +5,10 @@ use crate::sealed::Sealed;
 use crate::table::ReadOnlyUntypedTable;
 use crate::transaction_tracker::{SavepointId, TransactionId, TransactionTracker};
 use crate::tree_store::{
-    AllocationPolicy, Btree, BtreeHeader, BtreeMut, InternalTableDefinition, MAX_PAIR_LENGTH,
-    MAX_VALUE_LENGTH, Page, PageAllocator, PageHint, PageListMut, PageNumber, PageResolver,
-    PageTrackerPolicy, SerializedSavepoint, ShrinkPolicy, TableTree, TableTreeMut, TableType,
-    TransactionalMemory,
+    AllocationPolicy, Btree, BtreeHeader, BtreeMut, InternalTableDefinition, MAX_KEY_LENGTH,
+    MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, Page, PageAllocator, PageHint, PageListMut, PageNumber,
+    PageResolver, PageTrackerPolicy, SerializedSavepoint, ShrinkPolicy, TableTree, TableTreeMut,
+    TableType, TransactionalMemory,
 };
 use crate::types::{Key, Value};
 use crate::{
@@ -457,11 +457,14 @@ impl<'s, K: Key + 'static, V: Value + 'static> SystemTable<'s, K, V> {
             return Err(StorageError::ValueTooLarge(value_len));
         }
         let key_len = K::as_bytes(key.borrow()).as_ref().len();
-        if key_len > MAX_VALUE_LENGTH {
-            return Err(StorageError::ValueTooLarge(key_len));
+        if key_len > MAX_KEY_LENGTH {
+            return Err(StorageError::KeyTooLarge(key_len));
         }
-        if value_len + key_len > MAX_PAIR_LENGTH {
-            return Err(StorageError::ValueTooLarge(value_len + key_len));
+        if key_len.saturating_add(value_len) > MAX_PAIR_LENGTH {
+            return Err(StorageError::KeyValuePairTooLarge {
+                key_len,
+                value_len,
+            });
         }
         self.tree.insert(key.borrow(), value.borrow())
     }
@@ -487,11 +490,14 @@ impl<K: Key + 'static, V: MutInPlaceValue + 'static> SystemTable<'_, K, V> {
             return Err(StorageError::ValueTooLarge(value_length));
         }
         let key_len = K::as_bytes(key.borrow()).as_ref().len();
-        if key_len > MAX_VALUE_LENGTH {
-            return Err(StorageError::ValueTooLarge(key_len));
+        if key_len > MAX_KEY_LENGTH {
+            return Err(StorageError::KeyTooLarge(key_len));
         }
-        if value_length + key_len > MAX_PAIR_LENGTH {
-            return Err(StorageError::ValueTooLarge(value_length + key_len));
+        if key_len.saturating_add(value_length) > MAX_PAIR_LENGTH {
+            return Err(StorageError::KeyValuePairTooLarge {
+                key_len,
+                value_len: value_length,
+            });
         }
         self.tree.insert_reserve(key.borrow(), value_length)
     }

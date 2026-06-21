@@ -4,7 +4,7 @@ use crate::sealed::Sealed;
 use crate::table::{ReadableTableMetadata, TableStats};
 use crate::tree_store::{
     AllPageNumbersBtreeIter, BRANCH, Btree, BtreeCursorRange, BtreeHeader, BtreeMut,
-    DynamicCollection, DynamicCollectionType, LEAF, LeafAccessor, MAX_PAIR_LENGTH,
+    DynamicCollection, DynamicCollectionType, LEAF, LeafAccessor, MAX_KEY_LENGTH, MAX_PAIR_LENGTH,
     MAX_VALUE_LENGTH, Page, PageAllocator, PageHint, PageNumber, PageResolver, PageTrackerPolicy,
     RawBtree, RawLeafBuilder, multimap_btree_stats,
 };
@@ -449,15 +449,19 @@ impl<'txn, K: Key + 'static, V: Key + 'static> MultimapTable<'txn, K, V> {
     ) -> Result<bool> {
         let value_bytes = V::as_bytes(value.borrow());
         let value_bytes_ref = value_bytes.as_ref();
-        if value_bytes_ref.len() > MAX_VALUE_LENGTH {
-            return Err(StorageError::ValueTooLarge(value_bytes_ref.len()));
+        let value_len = value_bytes_ref.len();
+        if value_len > MAX_VALUE_LENGTH {
+            return Err(StorageError::ValueTooLarge(value_len));
         }
         let key_len = K::as_bytes(key.borrow()).as_ref().len();
-        if key_len > MAX_VALUE_LENGTH {
-            return Err(StorageError::ValueTooLarge(key_len));
+        if key_len > MAX_KEY_LENGTH {
+            return Err(StorageError::KeyTooLarge(key_len));
         }
-        if value_bytes_ref.len() + key_len > MAX_PAIR_LENGTH {
-            return Err(StorageError::ValueTooLarge(value_bytes_ref.len() + key_len));
+        if key_len.saturating_add(value_len) > MAX_PAIR_LENGTH {
+            return Err(StorageError::KeyValuePairTooLarge {
+                key_len,
+                value_len,
+            });
         }
         let get_result = self.tree.get(key.borrow())?;
         let existed = if get_result.is_some() {

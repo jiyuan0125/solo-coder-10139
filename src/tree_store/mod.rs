@@ -19,10 +19,11 @@ pub(crate) use btree_iters::AllPageNumbersBtreeIter;
 pub(crate) use extract_if::BtreeExtractIf;
 pub(crate) use multimap_btree::{DynamicCollection, DynamicCollectionType, multimap_btree_stats};
 pub(crate) use page_store::ReadOnlyBackend;
+pub use page_store::{MAX_KEY_LENGTH, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH};
 pub(crate) use page_store::{
-    AllocationPolicy, FILE_FORMAT_VERSION3, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, PAGE_SIZE, Page,
-    PageAllocator, PageHint, PageNumber, PageNumberHashSet, PageResolver, PageTrackerPolicy,
-    SerializedSavepoint, ShrinkPolicy, TransactionalMemory,
+    AllocationPolicy, FILE_FORMAT_VERSION3, PAGE_SIZE, Page, PageAllocator, PageHint, PageNumber,
+    PageNumberHashSet, PageResolver, PageTrackerPolicy, SerializedSavepoint, ShrinkPolicy,
+    TransactionalMemory,
 };
 pub use page_store::{InMemoryBackend, Savepoint, file_backend};
 pub(crate) use table_tree::{PageListMut, TableTree, TableTreeMut};
