@@ -641,15 +641,18 @@ impl<'txn, K: Key + 'static, V: Key + 'static> MultimapTable<'txn, K, V> {
                     } else {
                         let old_pairs_len = accessor.length_of_pairs(0, old_num_pairs);
                         let removed_value_len = accessor.entry(position).unwrap().key().len();
+                        let clamped_removed_len = removed_value_len.min(old_pairs_len);
+                        let old_keys_len = accessor.length_of_keys(0, old_num_pairs);
+                        let clamped_removed_keys_len = removed_value_len.min(old_keys_len);
                         let required = RawLeafBuilder::required_bytes(
                             old_num_pairs - 1,
-                            old_pairs_len - removed_value_len,
+                            old_pairs_len.saturating_sub(clamped_removed_len),
                             V::fixed_width(),
                             <() as Value>::fixed_width(),
                         );
                         let mut new_data = vec![0; required];
                         let new_key_len =
-                            accessor.length_of_keys(0, old_num_pairs) - removed_value_len;
+                            old_keys_len.saturating_sub(clamped_removed_keys_len);
                         let mut builder = RawLeafBuilder::new(
                             &mut new_data,
                             old_num_pairs - 1,

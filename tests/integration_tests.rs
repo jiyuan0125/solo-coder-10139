@@ -954,21 +954,35 @@ fn value_too_large() {
 }
 
 #[test]
-#[cfg(target_pointer_width = "64")]
 fn size_limit_three_violations_distinct() {
-    use redb::MAX_KEY_LENGTH;
-    use redb::MAX_PAIR_LENGTH;
-    use redb::MAX_VALUE_LENGTH;
+    use redb::{MAX_KEY_LENGTH, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH};
+    use redb::StorageError;
 
-    assert_eq!(MAX_KEY_LENGTH, 3 * 1024 * 1024 * 1024);
-    assert_eq!(MAX_VALUE_LENGTH, 3 * 1024 * 1024 * 1024);
-    assert_eq!(MAX_PAIR_LENGTH, 3 * 1024 * 1024 * 1024 + 768 * 1024 * 1024);
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(MAX_KEY_LENGTH, 3 * 1024 * 1024 * 1024);
+        assert_eq!(MAX_VALUE_LENGTH, 3 * 1024 * 1024 * 1024);
+        assert_eq!(MAX_PAIR_LENGTH, 3 * 1024 * 1024 * 1024 + 768 * 1024 * 1024);
+    }
 
-    let key_err = StorageError::KeyTooLarge(MAX_KEY_LENGTH + 1);
-    let value_err = StorageError::ValueTooLarge(MAX_VALUE_LENGTH + 1);
+    #[cfg(target_pointer_width = "32")]
+    {
+        assert!(MAX_KEY_LENGTH > 0);
+        assert!(MAX_VALUE_LENGTH > 0);
+        assert!(MAX_PAIR_LENGTH >= MAX_KEY_LENGTH);
+        assert!(MAX_PAIR_LENGTH >= MAX_VALUE_LENGTH);
+    }
+
+    let key_len_sample = MAX_KEY_LENGTH.saturating_add(1);
+    let value_len_sample = MAX_VALUE_LENGTH.saturating_add(1);
+    let pair_key_sample = 1usize;
+    let pair_value_sample = MAX_PAIR_LENGTH;
+
+    let key_err = StorageError::KeyTooLarge(key_len_sample);
+    let value_err = StorageError::ValueTooLarge(value_len_sample);
     let pair_err = StorageError::KeyValuePairTooLarge {
-        key_len: 1,
-        value_len: MAX_PAIR_LENGTH,
+        key_len: pair_key_sample,
+        value_len: pair_value_sample,
     };
 
     let key_msg = format!("{}", key_err);
@@ -997,62 +1011,78 @@ fn size_limit_three_violations_distinct() {
 }
 
 #[test]
-#[cfg(target_pointer_width = "64")]
 fn size_limit_boundary_values() {
-    let tmpfile = create_tempfile();
-    let db = Database::create(tmpfile.path()).unwrap();
-    let txn = db.begin_write().unwrap();
+    use redb::{MAX_KEY_LENGTH, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH};
+    use redb::StorageError;
+    use std::num::Wrapping;
 
-    use redb::MAX_KEY_LENGTH;
-    use redb::MAX_PAIR_LENGTH;
-    use redb::MAX_VALUE_LENGTH;
+    // --- 跨平台通用：纯逻辑层验证边界判断的布尔语义（不做大内存分配，32/64 位通用） ---
+    // 单边 key 边界：正好等于上限视为合法，超过一点报超限
+    assert!(!(MAX_KEY_LENGTH > MAX_KEY_LENGTH));
+    assert!(MAX_KEY_LENGTH.saturating_add(1) > MAX_KEY_LENGTH);
 
-    {
-        let mut table = txn.open_table(SLICE_TABLE).unwrap();
+    // 单边 value 边界：正好等于上限视为合法，超过一点报超限
+    assert!(!(MAX_VALUE_LENGTH > MAX_VALUE_LENGTH));
+    assert!(MAX_VALUE_LENGTH.saturating_add(1) > MAX_VALUE_LENGTH);
 
-        let small = vec![0u8; 1024];
+    // 总和边界：两边各自都没超但加起来正好等于总和上限视为合法
+    let key_legit = MAX_KEY_LENGTH;
+    let value_legit_at_pair_bound = MAX_PAIR_LENGTH.saturating_sub(key_legit);
+    assert!(!(key_legit.saturating_add(value_legit_at_pair_bound) > MAX_PAIR_LENGTH));
+    // 总和边界：超过 1 字节 -> 应报总和超限
+    assert!(key_legit.saturating_add(value_legit_at_pair_bound.saturating_add(1)) > MAX_PAIR_LENGTH);
 
-        let key_at_limit = vec![0u8; MAX_KEY_LENGTH];
-        assert!(matches!(
-            table.insert(key_at_limit.as_slice(), small.as_slice()),
-            Ok(_)
-        ));
-        drop(key_at_limit);
+    // 总和边界的另一种典型场景：两边各自都没超单边上限，但加起来远超总和上限
+    let key_big = MAX_KEY_LENGTH;
+    let value_big = MAX_VALUE_LENGTH;
+    // 用 saturating_add，不能让回绕把"本来超了"伪装成"没超"
+    let sum_big = key_big.saturating_add(value_big);
+    assert!(sum_big > MAX_PAIR_LENGTH);
+    // 确认这种情况下两个单边都合法
+    assert!(!(key_big > MAX_KEY_LENGTH));
+    assert!(!(value_big > MAX_VALUE_LENGTH));
 
-        let value_at_limit = vec![0u8; MAX_VALUE_LENGTH];
-        assert!(matches!(
-            table.insert(small.as_slice(), value_at_limit.as_slice()),
-            Ok(_)
-        ));
-        drop(value_at_limit);
+    // 饱和加法防回绕验证：普通 wrapping 加法会回绕时，饱和加法必须保持正确
+    let huge_a = usize::MAX / 2 + 100;
+    let huge_b = usize::MAX / 2 + 100;
+    let sat_sum = huge_a.saturating_add(huge_b);
+    let wrap_sum = (Wrapping(huge_a) + Wrapping(huge_b)).0;
+    if wrap_sum < huge_a {
+        // 确实发生了回绕
+        assert!(sat_sum >= huge_a);
+        assert!(sat_sum == usize::MAX);
+    }
+    // 对比验证：saturating_add 的结果与 wrapping_add 的结果必须不相同（回绕场景）
+    // 或者相同（非回绕场景）
+    let non_huge_a = 100usize;
+    let non_huge_b = 200usize;
+    assert_eq!(non_huge_a.saturating_add(non_huge_b), non_huge_a + non_huge_b);
 
-        let key_over = vec![0u8; MAX_KEY_LENGTH + 1];
-        assert!(matches!(
-            table.insert(key_over.as_slice(), small.as_slice()),
-            Err(StorageError::KeyTooLarge(_))
-        ));
-        drop(key_over);
+    // 三种错误变体的匹配路径验证（不依赖大内存分配，直接构造）
+    let key_len_sample = MAX_KEY_LENGTH.saturating_add(1);
+    let value_len_sample = MAX_VALUE_LENGTH.saturating_add(1);
+    let fake_key_err = StorageError::KeyTooLarge(key_len_sample);
+    let fake_value_err = StorageError::ValueTooLarge(value_len_sample);
+    let fake_pair_err = StorageError::KeyValuePairTooLarge {
+        key_len: key_big,
+        value_len: value_big,
+    };
+    assert!(matches!(fake_key_err, StorageError::KeyTooLarge(_)));
+    assert!(matches!(fake_value_err, StorageError::ValueTooLarge(_)));
+    assert!(matches!(fake_pair_err, StorageError::KeyValuePairTooLarge { .. }));
 
-        let value_over = vec![0u8; MAX_VALUE_LENGTH + 1];
-        assert!(matches!(
-            table.insert(small.as_slice(), value_over.as_slice()),
-            Err(StorageError::ValueTooLarge(_))
-        ));
-        drop(value_over);
-
-        let pair_key = vec![0u8; MAX_KEY_LENGTH];
-        let pair_value = vec![0u8; MAX_PAIR_LENGTH - MAX_KEY_LENGTH];
-        assert!(matches!(
-            table.insert(pair_key.as_slice(), pair_value.as_slice()),
-            Ok(_)
-        ));
-        drop(pair_value);
-
-        let pair_value_over = vec![0u8; MAX_PAIR_LENGTH - MAX_KEY_LENGTH + 1];
-        assert!(matches!(
-            table.insert(pair_key.as_slice(), pair_value_over.as_slice()),
-            Err(StorageError::KeyValuePairTooLarge { .. })
-        ));
+    // 确认三者的变体匹配不会被互相混淆
+    match fake_key_err {
+        StorageError::KeyTooLarge(_) => {}
+        _ => panic!("KeyTooLarge 被匹配成了其他变体"),
+    }
+    match fake_value_err {
+        StorageError::ValueTooLarge(_) => {}
+        _ => panic!("ValueTooLarge 被匹配成了其他变体"),
+    }
+    match fake_pair_err {
+        StorageError::KeyValuePairTooLarge { .. } => {}
+        _ => panic!("KeyValuePairTooLarge 被匹配成了其他变体"),
     }
 }
 

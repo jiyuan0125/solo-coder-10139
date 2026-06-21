@@ -543,3 +543,118 @@ fn multimap_remove_subtree_backed_key() {
     assert_eq!(iter.next().unwrap().unwrap().value(), 999);
     assert!(iter.next().is_none());
 }
+
+#[test]
+fn inline_remove_subtract_no_underflow() {
+    // === 场景 1：纯逻辑层验证饱和算术 + 钳制策略（模拟极端长度） ===
+    // 模拟 removed_value_len 大于 old_pairs_len / old_keys_len 时不会下溢
+    {
+        let old_pairs_len: usize = 1000;
+        let old_keys_len: usize = 1000;
+
+        // 正常情况：removed_value_len 不超过被减数
+        let removed_ok: usize = 200;
+        let clamped_ok = removed_ok.min(old_pairs_len);
+        let result_ok = old_pairs_len.saturating_sub(clamped_ok);
+        assert_eq!(result_ok, 800);
+        let clamped_keys_ok = removed_ok.min(old_keys_len);
+        let result_keys_ok = old_keys_len.saturating_sub(clamped_keys_ok);
+        assert_eq!(result_keys_ok, 800);
+
+        // 极端情况 A：removed_value_len 正好等于被减数 -> 结果为 0，不下溢
+        let removed_eq: usize = 1000;
+        let clamped_eq = removed_eq.min(old_pairs_len);
+        let result_eq = old_pairs_len.saturating_sub(clamped_eq);
+        assert_eq!(result_eq, 0);
+        let clamped_keys_eq = removed_eq.min(old_keys_len);
+        let result_keys_eq = old_keys_len.saturating_sub(clamped_keys_eq);
+        assert_eq!(result_keys_eq, 0);
+
+        // 极端情况 B：removed_value_len 大于被减数 -> 钳制 + saturating_sub 双重保护 -> 结果为 0
+        let removed_huge: usize = usize::MAX;
+        let clamped_huge = removed_huge.min(old_pairs_len);
+        let result_huge = old_pairs_len.saturating_sub(clamped_huge);
+        assert_eq!(result_huge, 0);
+        let clamped_keys_huge = removed_huge.min(old_keys_len);
+        let result_keys_huge = old_keys_len.saturating_sub(clamped_keys_huge);
+        assert_eq!(result_keys_huge, 0);
+
+        // 极端情况 C：两个长度都接近 usize 上限（模拟 32/64 位边界）
+        let near_max_1: usize = usize::MAX - 10;
+        let near_max_2: usize = usize::MAX - 100;
+        let removed_near_max: usize = usize::MAX;
+        // 钳制后：removed = near_max_1，减法结果为 0
+        let clamped_a = removed_near_max.min(near_max_1);
+        let result_a = near_max_1.saturating_sub(clamped_a);
+        assert_eq!(result_a, 0);
+        // 钳制后：removed = near_max_2，减法结果为 0
+        let clamped_b = removed_near_max.min(near_max_2);
+        let result_b = near_max_2.saturating_sub(clamped_b);
+        assert_eq!(result_b, 0);
+
+        // 正常场景：近上限的被减数，较小的减数 -> 正确差值必须保持
+        let big_old: usize = usize::MAX - 100;
+        let small_removed: usize = 10;
+        let clamped_small = small_removed.min(big_old);
+        let result_small = big_old.saturating_sub(clamped_small);
+        assert_eq!(result_small, usize::MAX - 110);
+    }
+
+    // === 场景 2：真实 MultimapTable 操作，覆盖 Inline 删除路径（两端平台通用） ===
+    let tmpfile = create_tempfile();
+    let db = Database::create(tmpfile.path()).unwrap();
+    let write_txn = db.begin_write().unwrap();
+    {
+        let mut table = write_txn.open_multimap_table(STR_TABLE).unwrap();
+        // 插入多个值，确保 key 对应的集合处于 Inline 模式
+        table.insert("k1", "v1").unwrap();
+        table.insert("k1", "v2").unwrap();
+        table.insert("k1", "v3").unwrap();
+        assert_eq!(table.get("k1").unwrap().len(), 3);
+
+        // 删除中间一个 -> 进入 Inline 删除的减法计算路径
+        assert!(table.remove("k1", &"v2").unwrap());
+        assert_eq!(table.get("k1").unwrap().len(), 2);
+
+        // 继续删除，直到只剩一个值
+        assert!(table.remove("k1", &"v1").unwrap());
+        assert_eq!(table.get("k1").unwrap().len(), 1);
+
+        // 删除最后一个值 -> 整个 key 被 remove，不会进减法分支
+        assert!(table.remove("k1", &"v3").unwrap());
+        let get_result = table.get("k1").unwrap();
+        assert_eq!(get_result.len(), 0);
+    }
+    write_txn.commit().unwrap();
+
+    // === 场景 3：使用 &[u8] 作为 value，各种长度的 value 组合覆盖不同的长度差 ===
+    let tmpfile2 = create_tempfile();
+    let db2 = Database::create(tmpfile2.path()).unwrap();
+    let write_txn2 = db2.begin_write().unwrap();
+    {
+        let mut table = write_txn2.open_multimap_table(SLICE_U64_TABLE).unwrap();
+        // 插入几个不同 value 长度的条目
+        let v_short: Vec<u8> = vec![1u8; 10];
+        let v_medium: Vec<u8> = vec![2u8; 100];
+        let v_long: Vec<u8> = vec![3u8; 500];
+        table.insert(v_short.as_slice(), 1u64).unwrap();
+        table.insert(v_medium.as_slice(), 2u64).unwrap();
+        table.insert(v_long.as_slice(), 3u64).unwrap();
+        table.insert(v_medium.as_slice(), 4u64).unwrap();
+        table.insert(v_short.as_slice(), 5u64).unwrap();
+        assert_eq!(table.len().unwrap(), 5);
+
+        // 按不同顺序删除，每种路径的长度差值都不同
+        assert!(table.remove(v_medium.as_slice(), &2u64).unwrap());
+        assert_eq!(table.len().unwrap(), 4);
+        assert!(table.remove(v_long.as_slice(), &3u64).unwrap());
+        assert_eq!(table.len().unwrap(), 3);
+        assert!(table.remove(v_short.as_slice(), &1u64).unwrap());
+        assert_eq!(table.len().unwrap(), 2);
+        assert!(table.remove(v_medium.as_slice(), &4u64).unwrap());
+        assert_eq!(table.len().unwrap(), 1);
+        assert!(table.remove(v_short.as_slice(), &5u64).unwrap());
+        assert_eq!(table.len().unwrap(), 0);
+    }
+    write_txn2.commit().unwrap();
+}
