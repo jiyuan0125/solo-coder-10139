@@ -17,7 +17,8 @@ mod xxh3;
 pub use backends::InMemoryBackend;
 pub(crate) use backends::ReadOnlyBackend;
 pub(crate) use base::{
-    MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, Page, PageHint, PageNumber, PageTrackerPolicy,
+    MAX_KEY_LENGTH, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, Page, PageHint, PageNumber,
+    PageTrackerPolicy,
 };
 pub(crate) use fast_hash::PageNumberHashSet;
 pub(crate) use header::PAGE_SIZE;

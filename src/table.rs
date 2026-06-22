@@ -2,8 +2,8 @@ use crate::db::TransactionGuard;
 use crate::sealed::Sealed;
 use crate::tree_store::{
     AccessGuardMutInPlace, Btree, BtreeCursorRange, BtreeExtractIf, BtreeHeader, BtreeMut,
-    MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, PageAllocator, PageHint, PageNumber, PageResolver,
-    PageTrackerPolicy, RawBtree,
+    MAX_KEY_LENGTH, MAX_PAIR_LENGTH, MAX_VALUE_LENGTH, PageAllocator, PageHint, PageNumber,
+    PageResolver, PageTrackerPolicy, RawBtree,
 };
 use crate::types::{Key, MutInPlaceValue, Value};
 use crate::{AccessGuard, AccessGuardMut, StorageError, WriteTransaction};
@@ -241,11 +241,14 @@ impl<'txn, K: Key + 'static, V: Value + 'static> Table<'txn, K, V> {
             return Err(StorageError::ValueTooLarge(value_len));
         }
         let key_len = K::as_bytes(key.borrow()).as_ref().len();
-        if key_len > MAX_VALUE_LENGTH {
-            return Err(StorageError::ValueTooLarge(key_len));
+        if key_len > MAX_KEY_LENGTH {
+            return Err(StorageError::KeyTooLarge(key_len));
         }
-        if value_len + key_len > MAX_PAIR_LENGTH {
-            return Err(StorageError::ValueTooLarge(value_len + key_len));
+        if key_len.saturating_add(value_len) > MAX_PAIR_LENGTH {
+            return Err(StorageError::KeyValuePairTooLarge {
+                key_len,
+                value_len,
+            });
         }
         self.tree.insert(key.borrow(), value.borrow())
     }
@@ -266,8 +269,8 @@ impl<'txn, K: Key + 'static, V: Value + 'static> Table<'txn, K, V> {
     /// lookup that a `get` followed by `insert` would require when updating a value.
     pub fn entry<'a>(&'a mut self, key: K::SelfType<'a>) -> Result<Entry<'a, K, V>> {
         let key_len = K::as_bytes(&key).as_ref().len();
-        if key_len > MAX_VALUE_LENGTH {
-            return Err(StorageError::ValueTooLarge(key_len));
+        if key_len > MAX_KEY_LENGTH {
+            return Err(StorageError::KeyTooLarge(key_len));
         }
         if self.tree.get(&key)?.is_some() {
             Ok(Entry::Occupied(OccupiedEntry {
@@ -298,11 +301,14 @@ impl<K: Key + 'static, V: MutInPlaceValue + 'static> Table<'_, K, V> {
             return Err(StorageError::ValueTooLarge(value_length));
         }
         let key_len = K::as_bytes(key.borrow()).as_ref().len();
-        if key_len > MAX_VALUE_LENGTH {
-            return Err(StorageError::ValueTooLarge(key_len));
+        if key_len > MAX_KEY_LENGTH {
+            return Err(StorageError::KeyTooLarge(key_len));
         }
-        if value_length + key_len > MAX_PAIR_LENGTH {
-            return Err(StorageError::ValueTooLarge(value_length + key_len));
+        if key_len.saturating_add(value_length) > MAX_PAIR_LENGTH {
+            return Err(StorageError::KeyValuePairTooLarge {
+                key_len,
+                value_len: value_length,
+            });
         }
         self.tree.insert_reserve(key.borrow(), value_length)
     }
@@ -897,8 +903,11 @@ impl<'a, K: Key + 'static, V: Value + 'static> OccupiedEntry<'a, K, V> {
             return Err(StorageError::ValueTooLarge(value_len));
         }
         let key_len = K::as_bytes(&self.key).as_ref().len();
-        if value_len + key_len > MAX_PAIR_LENGTH {
-            return Err(StorageError::ValueTooLarge(value_len + key_len));
+        if key_len.saturating_add(value_len) > MAX_PAIR_LENGTH {
+            return Err(StorageError::KeyValuePairTooLarge {
+                key_len,
+                value_len,
+            });
         }
         self.tree.insert(&self.key, value.borrow())?.ok_or_else(|| {
             StorageError::Corrupted(
@@ -952,8 +961,11 @@ impl<'a, K: Key + 'static, V: Value + 'static> VacantEntry<'a, K, V> {
             return Err(StorageError::ValueTooLarge(value_len));
         }
         let key_len = K::as_bytes(&self.key).as_ref().len();
-        if value_len + key_len > MAX_PAIR_LENGTH {
-            return Err(StorageError::ValueTooLarge(value_len + key_len));
+        if key_len.saturating_add(value_len) > MAX_PAIR_LENGTH {
+            return Err(StorageError::KeyValuePairTooLarge {
+                key_len,
+                value_len,
+            });
         }
         self.tree.insert(&self.key, value.borrow())?;
         self.tree.get_mut(&self.key)?.ok_or_else(|| {

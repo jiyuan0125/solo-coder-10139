@@ -15,6 +15,8 @@ create_exception!(redb, TransactionInProgress, DatabaseError);
 
 create_exception!(redb, Corrupted, StorageError);
 create_exception!(redb, ValueTooLarge, StorageError);
+create_exception!(redb, KeyTooLarge, StorageError);
+create_exception!(redb, KeyValuePairTooLarge, StorageError);
 create_exception!(redb, Io, StorageError);
 create_exception!(redb, PreviousIo, StorageError);
 create_exception!(redb, DatabaseClosed, StorageError);
@@ -42,6 +44,8 @@ pub(crate) fn map_storage_error(err: ::redb::StorageError) -> PyErr {
     match err {
         ::redb::StorageError::Corrupted(_) => Corrupted::new_err(msg),
         ::redb::StorageError::ValueTooLarge(_) => ValueTooLarge::new_err(msg),
+        ::redb::StorageError::KeyTooLarge(_) => KeyTooLarge::new_err(msg),
+        ::redb::StorageError::KeyValuePairTooLarge { .. } => KeyValuePairTooLarge::new_err(msg),
         ::redb::StorageError::Io(_) => Io::new_err(msg),
         ::redb::StorageError::PreviousIo => PreviousIo::new_err(msg),
         ::redb::StorageError::DatabaseClosed => DatabaseClosed::new_err(msg),
@@ -91,6 +95,11 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("Corrupted", m.py().get_type::<Corrupted>())?;
     m.add("ValueTooLarge", m.py().get_type::<ValueTooLarge>())?;
+    m.add("KeyTooLarge", m.py().get_type::<KeyTooLarge>())?;
+    m.add(
+        "KeyValuePairTooLarge",
+        m.py().get_type::<KeyValuePairTooLarge>(),
+    )?;
     m.add("Io", m.py().get_type::<Io>())?;
     m.add("PreviousIo", m.py().get_type::<PreviousIo>())?;
     m.add("DatabaseClosed", m.py().get_type::<DatabaseClosed>())?;

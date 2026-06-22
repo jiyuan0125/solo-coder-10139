@@ -933,17 +933,17 @@ fn value_too_large() {
         ));
         assert!(matches!(
             table.insert(too_big_value.as_slice(), small_value.as_slice()),
-            Err(StorageError::ValueTooLarge(_))
+            Err(StorageError::KeyTooLarge(_))
         ));
         assert!(matches!(
             table.insert(too_big_value.as_slice(), too_big_value.as_slice()),
-            Err(StorageError::ValueTooLarge(_))
+            Err(StorageError::KeyTooLarge(_))
         ));
         drop(too_big_value);
         let almost_big_value = vec![0u8; 2 * 1024 * 1024 * 1024];
         assert!(matches!(
             table.insert(almost_big_value.as_slice(), almost_big_value.as_slice()),
-            Err(StorageError::ValueTooLarge(_))
+            Err(StorageError::KeyValuePairTooLarge { .. })
         ));
     }
     txn.commit().unwrap();

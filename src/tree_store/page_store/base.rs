@@ -15,6 +15,7 @@ use std::sync::Arc;
 #[cfg(debug_assertions)]
 use std::sync::Mutex;
 
+pub(crate) const MAX_KEY_LENGTH: usize = 3 * 1024 * 1024 * 1024;
 pub(crate) const MAX_VALUE_LENGTH: usize = 3 * 1024 * 1024 * 1024;
 pub(crate) const MAX_PAIR_LENGTH: usize = 3 * 1024 * 1024 * 1024 + 768 * 1024 * 1024;
 pub(crate) const MAX_PAGE_INDEX: u32 = 0x000F_FFFF;
